@@ -6,6 +6,7 @@ from django.contrib.auth.decorators import login_required
 from django.utils import timezone
 from django.db.models import Count
 from datetime import datetime, time, timedelta
+from .serializers import ClientBookingCardSerializer
 
 from apps.worker.models import WorkerAvailability, WorkerJob
 from apps.users.models import WorkerProfile
@@ -221,9 +222,7 @@ class AvailableTimeSlotsView(generics.GenericAPIView):
         })
 
 
-# ========================================
-# 6. CREATE BOOKING (address, notes, service_name included)
-# ========================================
+# apps/client/views.py → FINAL CORRECT VERSION
 class CreateBookingView(generics.CreateAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -234,34 +233,43 @@ class CreateBookingView(generics.CreateAPIView):
         address = request.data.get('address')
         notes = request.data.get('notes', '')
 
-        # service_name is NOT required from client anymore
-        required = [worker_id, date_str, time_str, address]
-        if not all(required):
+        if not all([worker_id, date_str, time_str, address]):
             return Response({"success": False, "message": "Missing required fields"}, status=400)
 
         try:
-            worker = User.objects.get(id=worker_id, user_type='worker')
+            worker = User.objects.get(id=worker_id, user_type='worker', is_active=True)
             date = datetime.strptime(date_str, "%Y-%m-%d").date()
             time = datetime.strptime(time_str, "%H:%M:%S").time()
-        except Exception as e:
-            return Response({"success": False, "message": "Invalid data format"}, status=400)
+        except User.DoesNotExist:
+            return Response({"success": False, "message": "Worker not found"}, status=404)
+        except ValueError:
+            return Response({"success": False, "message": "Invalid date/time"}, status=400)
 
-        # Check availability
-        avail = WorkerAvailability.objects.filter(worker=worker, date=date, status='free').first()
-        if not avail:
-            return Response({"success": False, "message": "This date is no longer available"}, status=400)
+        # Calendar check
+        if not WorkerAvailability.objects.filter(worker=worker, date=date, status='free').exists():
+            return Response({"success": False, "message": "Date no longer available"}, status=400)
 
-        if WorkerJob.objects.filter(worker=worker, date=date, time=time).exists():
-            return Response({"success": False, "message": "This time slot is already booked"}, status=400)
+        # Block only ACTIVE (started) jobs
+        if WorkerJob.objects.filter(worker=worker, date=date, time=time, status='started').exists():
+            return Response({"success": False, "message": "Time slot in progress"}, status=400)
 
-        # AUTO SET service_name from worker's profession
+        # MAIN RULE: Only ONE pending OR upcoming job allowed per client-worker
+        if WorkerJob.objects.filter(
+            client=request.user,
+            worker=worker,
+            status__in=['pending', 'started']   # ← blocks both pending and active
+        ).exists():
+            return Response({
+                "success": False,
+                "message": "You already have an active or pending booking with this worker"
+            }, status=400)
+
+        # All good → create booking
         service_name = worker.worker_profile.get_profession_display()
-
-        # Create the booking
         job = WorkerJob.objects.create(
             worker=worker,
             client=request.user,
-            service_name=service_name,        # Auto-filled
+            service_name=service_name,
             date=date,
             time=time,
             address=address,
@@ -269,19 +277,42 @@ class CreateBookingView(generics.CreateAPIView):
             status='pending'
         )
 
-        # Mark calendar as booked
-        avail.status = 'job'
-        avail.save()
+        return Response({
+            "success": True,
+            "message": "Booking request sent! Waiting for worker to accept.",
+            "booking_id": job.id,
+            "booking": {
+                "id": job.id,
+                "worker_id": worker.id,
+                "worker_name": worker.full_name,
+                "profession": service_name,
+                "date": date.strftime("%A, %B %d, %Y"),
+                "time": time.strftime("%I:%M %p").lstrip("0"),
+                "address": address,
+                "status": "pending",
+                "created_at": timezone.localtime(job.created_at).isoformat()
+            }
+        }, status=201)
+    
+
+class ClientMyBookingsView(generics.GenericAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        client = request.user
+
+        pending = WorkerJob.objects.filter(client=client, status='pending') \
+            .select_related('worker', 'worker__worker_profile')
+
+        upcoming = WorkerJob.objects.filter(client=client, status='started') \
+            .select_related('worker', 'worker__worker_profile')
+
+        completed = WorkerJob.objects.filter(client=client, status='completed') \
+            .select_related('worker', 'worker__worker_profile')
 
         return Response({
             "success": True,
-            "message": "Your Booking request has been successfully sent!",
-            "booking": {
-                "id": job.id,
-                "worker_name": worker.full_name,
-                "profession": service_name,
-                "date": date.strftime("%A, %b %d, %Y"),
-                "time": time.strftime("%I:%M %p").lstrip("0"),
-                "address": address
-            }
-        }, status=201)
+            "pending": ClientBookingCardSerializer(pending, many=True).data,
+            "upcoming": ClientBookingCardSerializer(upcoming, many=True).data,
+            "completed": ClientBookingCardSerializer(completed, many=True).data,
+        })
