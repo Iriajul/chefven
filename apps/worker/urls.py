@@ -7,6 +7,8 @@ from .views import (
     MyJobsView,
     start_job,
     reject_job,
+    JobDetailForInvoiceView,
+    CreateInvoiceView,
 )
 
 urlpatterns = [
@@ -17,4 +19,7 @@ urlpatterns = [
     path('my-jobs/', MyJobsView.as_view(), name='my-jobs'),
     path('job/<int:job_id>/start/', start_job, name='start-job'),
     path('job/<int:job_id>/reject/', reject_job, name='reject-job'),
+
+    path('job/<int:job_id>/invoice-form/', JobDetailForInvoiceView.as_view()),
+    path('invoice/create/', CreateInvoiceView.as_view()),
 ]

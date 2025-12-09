@@ -1,14 +1,17 @@
 # apps/client/views.py
+from django.db import models
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.utils import timezone
-from django.db.models import Count
+from django.db.models import Count, Q, Avg
 from datetime import datetime, time, timedelta
 from .serializers import ClientBookingCardSerializer
-
-from apps.worker.models import WorkerAvailability, WorkerJob
+from decimal import Decimal
+import random
+import string
+from apps.worker.models import WorkerAvailability, WorkerJob, Invoice, Review
 from apps.users.models import WorkerProfile
 
 User = get_user_model()
@@ -53,10 +56,15 @@ class WorkersByProfessionView(generics.ListAPIView):
         return WorkerProfile.objects.filter(
             profession=profession,
             user__is_active=True
-        ).select_related('user')
+        ).select_related('user').annotate(
+            avg_rating=Avg('user__reviews_received__rating'),
+            total_reviews=Count('user__reviews_received'),
+            completed_jobs=Count('user__jobs', filter=models.Q(user__jobs__status='completed'))
+        )
 
     def list(self, request, *args, **kwargs):
         queryset = self.get_queryset()
+        
         if not queryset.exists():
             return Response({
                 "success": True,
@@ -64,25 +72,26 @@ class WorkersByProfessionView(generics.ListAPIView):
                 "message": "No workers found in this category"
             })
 
-        data = []
+        workers = []
         for profile in queryset:
             user = profile.user
-            data.append({
+            
+            workers.append({
                 "id": user.id,
                 "full_name": user.full_name or "No Name",
-                "photo": None,
+                "photo": None,  # add Cloudinary later
                 "profession": profile.get_profession_display(),
-                "hourly_rate": str(profile.hourly_rate),
-                "rating": float(profile.rating) if profile.rating else 0.0,
-                "total_reviews": 0,
-                "total_jobs": profile.total_jobs,
-                "skills": profile.skills,
+                "location": "America",  # or add real location field later
                 "experience_years": profile.experience_years,
+                "rating": round(profile.avg_rating, 1) if profile.avg_rating else 0.0,
+                "total_reviews": profile.total_reviews or 0,
+                "hourly_rate": f"${profile.hourly_rate}",
+                "total_jobs": profile.completed_jobs, 
             })
 
         return Response({
             "success": True,
-            "workers": data
+            "workers": workers
         })
 
 
@@ -99,9 +108,10 @@ class ContractorProfileView(generics.GenericAPIView):
         except (User.DoesNotExist, WorkerProfile.DoesNotExist):
             return Response({
                 "success": False,
-                "message": "Worker not found or profile incomplete"
+                "message": "Worker not found"
             }, status=404)
 
+        # === AVAILABILITY ===
         today = timezone.now()
         availabilities = WorkerAvailability.objects.filter(
             worker=worker,
@@ -114,21 +124,38 @@ class ContractorProfileView(generics.GenericAPIView):
             for item in availabilities
         ]
 
-        data = {
+        # === TOTAL COMPLETED JOBS ONLY ===
+        total_completed_jobs = WorkerJob.objects.filter(
+            worker=worker,
+            status='completed'
+        ).count()
+
+        # === REAL REVIEWS ===
+        reviews = Review.objects.filter(
+            reviewee=worker,
+            job__status='completed'
+        ).select_related('reviewer').order_by('-created_at')
+
+        review_list = []
+        for r in reviews:
+            review_list.append({
+                "client_name": r.reviewer.full_name or "Anonymous",
+                "rating": r.rating,
+                "comment": r.comment or "No comment",
+                "date": r.created_at.strftime("%b %d, %Y"),
+                "photos": r.get_photos()
+            })
+
+        return Response({
             "success": True,
             "worker": {
-                "id": worker.id,
-                "full_name": worker.full_name or "No Name Set",
-                "photo": None,
+                "full_name": worker.full_name or "No Name",
                 "profession": profile.get_profession_display(),
-                "location": worker.phone[:3] if worker.phone else "Not Set",
+                "location": "America",
                 "hourly_rate": str(profile.hourly_rate),
-                "total_jobs": profile.total_jobs,
+                "total_jobs": total_completed_jobs,
                 "experience_years": profile.experience_years,
-                "rating": round(float(profile.rating), 1) if profile.rating and profile.rating > 0 else 0.0,
-                "total_reviews": 0,
-                "skills": profile.skills or [],
-                "is_verified": False
+                "skills": profile.skills or []
             },
             "availability": {
                 "year": today.year,
@@ -136,9 +163,8 @@ class ContractorProfileView(generics.GenericAPIView):
                 "month_name": today.strftime("%B"),
                 "dates": availability_list
             },
-            "reviews": []
-        }
-        return Response(data)
+            "reviews": review_list
+        })
 
 
 # ========================================
@@ -315,4 +341,134 @@ class ClientMyBookingsView(generics.GenericAPIView):
             "pending": ClientBookingCardSerializer(pending, many=True).data,
             "upcoming": ClientBookingCardSerializer(upcoming, many=True).data,
             "completed": ClientBookingCardSerializer(completed, many=True).data,
+        })
+    
+
+class ClientViewInvoiceView(generics.RetrieveAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, job_id):
+        try:
+            # CORRECT WAY — Q objects with keyword args, no positional args after
+            job = WorkerJob.objects.get(
+                Q(id=job_id) &
+                Q(status='completed') &
+                (Q(client=request.user) | Q(worker=request.user))
+            )
+            invoice = job.invoice
+        except (WorkerJob.DoesNotExist, Invoice.DoesNotExist):
+            return Response({
+                "success": False,
+                "message": "Invoice not found or access denied"
+            }, status=404)
+
+        # Calculate totals safely
+        labor = invoice.hours_worked * invoice.hourly_rate
+        materials_total = sum(Decimal(str(item.get('cost', 0))) for item in invoice.materials)
+        total = labor + materials_total + invoice.service_charge
+
+        return Response({
+            "success": True,
+            "invoice": {
+                "invoice_number": f"INVB-{invoice.id}",
+                "worker_name": job.worker.full_name,
+                "profession": job.worker.worker_profile.get_profession_display(),
+                "service": job.service_name,
+                "date": job.date.strftime("%b %d, %Y"),
+                "time": job.time.strftime("%I:%M %p"),
+                "address": job.address,
+                "notes": job.notes or "No notes",
+                "materials": invoice.materials,
+                "labor": f"{invoice.hours_worked} hrs × ${invoice.hourly_rate}/hr",
+                "labor_cost": f"${labor:.2f}",
+                "materials_total": f"${materials_total:.2f}",
+                "service_charge": f"${invoice.service_charge:.2f}",
+                "total": f"${total:.2f}"
+            }
+        })
+    
+
+class MarkAsPaidView(generics.GenericAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, job_id):
+        try:
+            job = WorkerJob.objects.get(
+                id=job_id,
+                client=request.user,
+                status='completed',
+                is_paid=False
+            )
+            invoice = job.invoice
+        except (WorkerJob.DoesNotExist, Invoice.DoesNotExist):
+            return Response({"success": False, "message": "Job not found or already paid"}, status=404)
+
+        # Mark as paid
+        job.is_paid = True
+        job.paid_at = timezone.now()
+        job.transaction_id = 'TXN-' + ''.join(random.choices(string.digits, k=10))
+        job.save()
+
+        return Response({
+            "success": True,
+            "message": "Your payment has been processed successfully!",
+            "payment": {
+                "transaction_id": job.transaction_id,
+                "date": job.paid_at.strftime("%d %B, %Y"),
+                "worker_name": job.worker.full_name,
+                "service": job.service_name,
+                "amount": f"${invoice.total:.2f}"
+            }
+        })
+    
+
+class ClientReviewWorkerView(generics.CreateAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, job_id):
+        try:
+            job = WorkerJob.objects.get(
+                id=job_id,
+                client=request.user,
+                status='completed',
+                is_paid=True
+            )
+        except WorkerJob.DoesNotExist:
+            return Response({"success": False, "message": "Job not found or not paid"}, status=404)
+
+        # Prevent duplicate review from same client
+        if Review.objects.filter(reviewer=request.user, job=job).exists():
+            return Response({"success": False, "message": "You already reviewed this worker"}, status=400)
+
+        rating = request.data.get('rating')
+        comment = request.data.get('comment', '')
+        photo1 = request.FILES.get('photo1')
+        photo2 = request.FILES.get('photo2')
+        photo3 = request.FILES.get('photo3')
+        photo4 = request.FILES.get('photo4')
+        photo5 = request.FILES.get('photo5')
+
+        try:
+            rating = int(rating)
+            if not 1 <= rating <= 5:
+                raise ValueError
+        except:
+            return Response({"success": False, "message": "Rating must be 1-5"}, status=400)
+
+        Review.objects.create(
+            reviewer=request.user,
+            reviewee=job.worker,
+            job=job,
+            rating=rating,
+            comment=comment,
+            photo1=photo1,
+            photo2=photo2,
+            photo3=photo3,
+            photo4=photo4,
+            photo5=photo5,
+        )
+
+        return Response({
+            "success": True,
+            "message": "Thank you! Your review has been submitted."
         })

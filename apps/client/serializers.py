@@ -9,6 +9,7 @@ class ClientBookingCardSerializer(serializers.ModelSerializer):
     profession = serializers.CharField(source='worker.worker_profile.get_profession_display', read_only=True)
     date_display = serializers.SerializerMethodField()
     time_display = serializers.SerializerMethodField()
+    is_paid = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = WorkerJob
@@ -22,7 +23,8 @@ class ClientBookingCardSerializer(serializers.ModelSerializer):
             'date_display',
             'time_display',
             'address',
-            'notes'
+            'notes',
+            'is_paid'
         ]
 
     def get_worker_photo(self, obj):

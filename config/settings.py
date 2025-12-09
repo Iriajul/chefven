@@ -64,6 +64,8 @@ INSTALLED_APPS = [
     "rest_framework_simplejwt.token_blacklist",
 
     # Your apps
+    'channels',
+    'apps.messaging',
     "apps.users",
     "apps.worker",
     #"apps.admin_api",
@@ -74,6 +76,20 @@ INSTALLED_APPS = [
 AUTHENTICATION_BACKENDS = [
     "django.contrib.auth.backends.ModelBackend",
 ]
+
+# ASGI APPLICATION (MUST HAVE)
+ASGI_APPLICATION = "config.asgi.application"
+
+# CHANNEL LAYERS (for real-time)
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [("127.0.0.1", 6379)],
+        },
+    },
+}
+
 
 # -----------------------
 # MIDDLEWARE
