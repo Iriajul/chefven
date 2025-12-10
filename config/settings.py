@@ -27,7 +27,7 @@ ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["127.0.0.1", "localhost"])
 CSRF_TRUSTED_ORIGINS = [
     "http://127.0.0.1:8000",
     "http://localhost:8000",
-    "https://1kklrhx5-8000.inc1.devtunnels.ms/",
+    "https://jbl70m3b-8000.inc1.devtunnels.ms/",
     "http://localhost:3000"
 ]
 # -----------------------
@@ -35,7 +35,7 @@ CSRF_TRUSTED_ORIGINS = [
 # -----------------------
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
-    "https://1kklrhx5-8000.inc1.devtunnels.ms",
+    "https://jbl70m3b-8000.inc1.devtunnels.ms",
     "https://boyia.vercel.app",
     "http://localhost:3000"
 ]

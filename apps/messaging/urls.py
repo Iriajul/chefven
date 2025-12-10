@@ -1,7 +1,8 @@
 # apps/messaging/urls.py
 from django.urls import path
-from .views import InboxView
+from . import views
 
 urlpatterns = [
-    path('inbox/', InboxView.as_view(), name='inbox'),
+    path('conversations/', views.InboxView.as_view(), name='chat-list'),
+    path('conversation/<int:pk>/', views.ConversationDetailView.as_view(), name='chat-detail'),
 ]

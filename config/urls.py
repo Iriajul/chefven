@@ -8,4 +8,5 @@ urlpatterns = [
     path('api/auth/', include('apps.users.urls')),
     path('api/worker/', include('apps.worker.urls')),
     path('api/client/', include('apps.client.urls')),
+    path('api/messaging/', include('apps.messaging.urls')),
 ]
