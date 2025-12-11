@@ -1,13 +1,15 @@
 # apps/users/views.py
-from rest_framework import generics, status
+from rest_framework import generics, status, permissions
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 from rest_framework_simplejwt.tokens import RefreshToken, UntypedToken
 from django.contrib.auth import get_user_model
 from django.core.mail import send_mail
 from django.conf import settings
+from django.db.models import Count, Avg, Q
 from django.utils import timezone
 from .models import WorkerProfile
+from apps.worker.models import WorkerJob, Review
 from .serializers import WorkerStep1Serializer, WorkerStep2Serializer, LoginSerializer, ResetPasswordSerializer, ForgotPasswordSerializer, VerifyOtpSerializer, ClientSignupSerializer
 
 User = get_user_model()
@@ -260,3 +262,84 @@ class ClientSignupView(generics.CreateAPIView):
                 "user_type": "client"
             }
         }, status=status.HTTP_201_CREATED)
+    
+
+class UserProfileView(generics.RetrieveAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def retrieve(self, request, *args, **kwargs):
+        user = request.user
+
+        base_data = {
+            "full_name": user.full_name or user.username,
+            "location": "America",
+            "photo": None,
+        }
+
+        if user.user_type == 'client':
+            completed_jobs = WorkerJob.objects.filter(client=user, status='completed')
+            hired_count = completed_jobs.count()
+            unique_workers = completed_jobs.values('worker').distinct().count()
+
+            reviews_received = Review.objects.filter(
+                reviewee=user,
+                job__status='completed'
+            ).select_related('reviewer').order_by('-created_at')
+
+            avg_rating = reviews_received.aggregate(avg=Avg('rating'))['avg']
+            avg_rating = round(avg_rating or 0, 1)
+
+            base_data.update({
+                "user_type": "client",
+                "rating": avg_rating,
+                "total_reviews": reviews_received.count(),
+                "hired_count": hired_count,
+                "unique_workers": unique_workers,
+                "reviews": [
+                    {
+                        "reviewer_name": r.reviewer.full_name or r.reviewer.username,
+                        "rating": r.rating,
+                        "comment": r.comment or "No comment",
+                        "date": r.created_at.strftime("%b %d, %Y"),
+                        "photos": r.get_photos()
+                    }
+                    for r in reviews_received[:10]
+                ]
+            })
+
+        else:
+            profile = user.worker_profile
+            completed_jobs_count = WorkerJob.objects.filter(worker=user, status='completed').count()
+
+            reviews_received = Review.objects.filter(
+                reviewee=user,
+                job__status='completed'
+            ).select_related('reviewer').order_by('-created_at')
+
+            avg_rating = reviews_received.aggregate(avg=Avg('rating'))['avg']
+            avg_rating = round(avg_rating or 0, 1)
+
+            base_data.update({
+                "user_type": "worker",
+                "profession": profile.get_profession_display(),
+                "hourly_rate": f"${profile.hourly_rate}",
+                "experience_years": profile.experience_years,
+                "rating": avg_rating,
+                "total_reviews": reviews_received.count(),
+                "total_jobs": completed_jobs_count,
+                "reviews": [
+                    {
+                        "client_name": r.reviewer.full_name or r.reviewer.username,
+                        "rating": r.rating,
+                        "comment": r.comment or "No comment",
+                        "date": r.created_at.strftime("%b %d, %Y"),
+                        "photos": r.get_photos()
+                    }
+                    for r in reviews_received[:10]
+                ]
+            })
+
+        return Response({
+            "success": True,
+            "profile": base_data
+        })
