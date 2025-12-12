@@ -3,7 +3,7 @@ from django.contrib.auth.models import AbstractUser
 from django.db import models
 from django.utils import timezone
 import random
-import cloudinary.uploader
+from cloudinary.models import CloudinaryField
 
 class User(AbstractUser):
     USER_TYPE_CHOICES = (
@@ -15,6 +15,8 @@ class User(AbstractUser):
     full_name = models.CharField(max_length=255, blank=True)
     phone = models.CharField(max_length=20, blank=True, null=True)
     is_profile_complete = models.BooleanField(default=False)
+    profile_pic = CloudinaryField('image', blank=True, null=True)
+    location = models.CharField(max_length=100, blank=True, null=True)
     otp = models.CharField(max_length=6, blank=True, null=True) 
     otp_created_at = models.DateTimeField(blank=True, null=True)  
     created_at = models.DateTimeField(auto_now_add=True)

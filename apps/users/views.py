@@ -270,10 +270,14 @@ class UserProfileView(generics.RetrieveAPIView):
     def retrieve(self, request, *args, **kwargs):
         user = request.user
 
-        base_data = {
+        # BASE DATA — NOW USING REAL FIELDS
+        profile_data = {
             "full_name": user.full_name or user.username,
-            "location": "America",
-            "photo": None,
+            "email": user.email,
+            "phone": user.phone or "",
+            "location": user.location or "Not set",
+            "profile_pic": user.profile_pic.url if user.profile_pic else None, 
+            "user_type": user.user_type,
         }
 
         if user.user_type == 'client':
@@ -289,15 +293,14 @@ class UserProfileView(generics.RetrieveAPIView):
             avg_rating = reviews_received.aggregate(avg=Avg('rating'))['avg']
             avg_rating = round(avg_rating or 0, 1)
 
-            base_data.update({
-                "user_type": "client",
+            profile_data.update({
                 "rating": avg_rating,
                 "total_reviews": reviews_received.count(),
                 "hired_count": hired_count,
                 "unique_workers": unique_workers,
                 "reviews": [
                     {
-                        "reviewer_name": r.reviewer.full_name or r.reviewer.username,
+                        "reviewer_name": r.reviewer.get_full_name() or r.reviewer.username,
                         "rating": r.rating,
                         "comment": r.comment or "No comment",
                         "date": r.created_at.strftime("%b %d, %Y"),
@@ -307,7 +310,7 @@ class UserProfileView(generics.RetrieveAPIView):
                 ]
             })
 
-        else:
+        else:  # worker
             profile = user.worker_profile
             completed_jobs_count = WorkerJob.objects.filter(worker=user, status='completed').count()
 
@@ -319,17 +322,16 @@ class UserProfileView(generics.RetrieveAPIView):
             avg_rating = reviews_received.aggregate(avg=Avg('rating'))['avg']
             avg_rating = round(avg_rating or 0, 1)
 
-            base_data.update({
-                "user_type": "worker",
+            profile_data.update({
                 "profession": profile.get_profession_display(),
                 "hourly_rate": f"${profile.hourly_rate}",
                 "experience_years": profile.experience_years,
+                "total_jobs": completed_jobs_count,
                 "rating": avg_rating,
                 "total_reviews": reviews_received.count(),
-                "total_jobs": completed_jobs_count,
                 "reviews": [
                     {
-                        "client_name": r.reviewer.full_name or r.reviewer.username,
+                        "client_name": r.reviewer.get_full_name() or r.reviewer.username,
                         "rating": r.rating,
                         "comment": r.comment or "No comment",
                         "date": r.created_at.strftime("%b %d, %Y"),
@@ -341,5 +343,40 @@ class UserProfileView(generics.RetrieveAPIView):
 
         return Response({
             "success": True,
-            "profile": base_data
+            "profile": profile_data
+        })
+
+
+class EditProfileView(generics.UpdateAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def patch(self, request, *args, **kwargs):
+        user = request.user
+
+        full_name = request.data.get('full_name')
+        phone = request.data.get('phone')
+        location = request.data.get('location')
+        profile_pic = request.FILES.get('profile_pic')
+
+        if full_name is not None:
+            user.full_name = full_name.strip() or user.full_name
+        if phone is not None:
+            user.phone = phone.strip() or user.phone  # ← NOW UPDATES PHONE
+        if location is not None:
+            user.location = location.strip() or user.location
+        if profile_pic:
+            user.profile_pic = profile_pic
+
+        user.save()
+
+        return Response({
+            "success": True,
+            "message": "Profile updated successfully",
+            "profile": {
+                "full_name": user.full_name,
+                "email": user.email,
+                "phone": user.phone or "",
+                "location": user.location or "Not set",
+                "profile_pic": user.profile_pic.url if user.profile_pic else None
+            }
         })

@@ -28,7 +28,9 @@ class ClientBookingCardSerializer(serializers.ModelSerializer):
         ]
 
     def get_worker_photo(self, obj):
-        return None  # add later
+        if obj.worker.profile_pic:
+            return obj.worker.profile_pic.url
+        return None
 
     def get_date_display(self, obj):
         return obj.date.strftime("%b %d")

@@ -79,14 +79,14 @@ class WorkersByProfessionView(generics.ListAPIView):
             workers.append({
                 "id": user.id,
                 "full_name": user.full_name or "No Name",
-                "photo": None,  # add Cloudinary later
+                "photo": user.profile_pic.url if user.profile_pic else None, 
                 "profession": profile.get_profession_display(),
-                "location": "America",  # or add real location field later
+                "location": user.location or "Not set",
                 "experience_years": profile.experience_years,
                 "rating": round(profile.avg_rating, 1) if profile.avg_rating else 0.0,
                 "total_reviews": profile.total_reviews or 0,
                 "hourly_rate": f"${profile.hourly_rate}",
-                "total_jobs": profile.completed_jobs, 
+                "total_jobs": profile.completed_jobs,
             })
 
         return Response({
@@ -151,6 +151,7 @@ class ContractorProfileView(generics.GenericAPIView):
             "worker": {
                 "full_name": worker.full_name or "No Name",
                 "profession": profile.get_profession_display(),
+                "profile_pic": worker.profile_pic.url if worker.profile_pic else None,
                 "location": "America",
                 "hourly_rate": str(profile.hourly_rate),
                 "total_jobs": total_completed_jobs,
@@ -312,6 +313,7 @@ class CreateBookingView(generics.CreateAPIView):
                 "worker_id": worker.id,
                 "worker_name": worker.full_name,
                 "profession": service_name,
+                "profile_pic": worker.profile_pic.url if worker.profile_pic else None,
                 "date": date.strftime("%A, %B %d, %Y"),
                 "time": time.strftime("%I:%M %p").lstrip("0"),
                 "address": address,
