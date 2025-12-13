@@ -1,12 +1,15 @@
+# apps/messaging/serializers.py → FINAL VERSION (FULL NAME + EMAIL)
+
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from .models import Conversation, Message
 
-UserAccount = get_user_model()
+User = get_user_model()
 
 class ConversationSerializer(serializers.ModelSerializer):
     other_user_id = serializers.SerializerMethodField()
-    conversation_name = serializers.SerializerMethodField()
+    conversation_name = serializers.SerializerMethodField()  # ← Shows full_name if exists
+    conversation_email = serializers.SerializerMethodField()  # ← Always shows email
     last_message = serializers.SerializerMethodField()
     last_message_sender = serializers.SerializerMethodField()
     last_message_is_me = serializers.SerializerMethodField()
@@ -20,6 +23,7 @@ class ConversationSerializer(serializers.ModelSerializer):
             'id',
             'other_user_id',
             'conversation_name',
+            'conversation_email',
             'other_user_avatar',
             'last_message',
             'last_message_sender',
@@ -28,65 +32,62 @@ class ConversationSerializer(serializers.ModelSerializer):
             'unread_count'
         ]
 
-    def get_other_user_id(self, obj):
-        other_user = self.get_other_user(obj)
-        return str(other_user.id) if other_user else None
-
     def get_other_user(self, obj):
-        # cache the other participant for reuse
         if not hasattr(obj, '_cached_other_user'):
             user = self.context['request'].user
             other_participant = obj.participants.exclude(user=user).select_related('user').first()
             obj._cached_other_user = other_participant.user if other_participant else None
         return obj._cached_other_user
 
-    def get_last_message_obj(self, obj):
-        # cache the last message for reuse
-        if not hasattr(obj, '_cached_last_message'):
-            if hasattr(obj, 'latest_messages') and obj.latest_messages:
-                obj._cached_last_message = obj.latest_messages[0]
-            else:
-                obj._cached_last_message = obj.messages.order_by('-created_at').first()
-        return obj._cached_last_message
+    def get_other_user_id(self, obj):
+        other = self.get_other_user(obj)
+        return str(other.id) if other else None
 
     def get_conversation_name(self, obj):
-        other_user = self.get_other_user(obj)
-        if other_user:
-            full_name = f"{other_user.first_name} {other_user.last_name}".strip()
-            return full_name or other_user.username
+        other = self.get_other_user(obj)
+        if other:
+            full_name = other.full_name.strip()  # ← Use full_name field
+            return full_name or other.email or other.username
         return "Unknown"
 
+    def get_conversation_email(self, obj):
+        other = self.get_other_user(obj)
+        return other.email if other else None
+
     def get_other_user_avatar(self, obj):
-        other_user = self.get_other_user(obj)
-        if other_user and getattr(other_user, "profile_pic", None):
-            avatar = other_user.profile_pic
-            if hasattr(avatar, 'url'):
-                return avatar.url
+        other = self.get_other_user(obj)
+        if other and other.profile_pic:
+            return other.profile_pic.url
         return None
 
     def get_last_message(self, obj):
-        last_msg = self.get_last_message_obj(obj)
-        return last_msg.content if last_msg else ""
+        msg = obj.messages.order_by('-created_at').first()
+        return msg.content if msg else ""
 
     def get_last_message_sender(self, obj):
-        last_msg = self.get_last_message_obj(obj)
-        if not last_msg:
+        msg = obj.messages.order_by('-created_at').first()
+        if not msg:
             return ""
         user = self.context['request'].user
-        return "Me" if last_msg.sender == user else f"{last_msg.sender.first_name} {last_msg.sender.last_name}".strip() or last_msg.sender.username
+        if msg.sender == user:
+            return "Me"
+        full_name = msg.sender.full_name.strip()
+        return full_name or msg.sender.email
 
     def get_last_message_is_me(self, obj):
-        last_msg = self.get_last_message_obj(obj)
-        if not last_msg:
-            return None
-        return last_msg.sender == self.context['request'].user
+        msg = obj.messages.order_by('-created_at').first()
+        return msg.sender == self.context['request'].user if msg else False
 
     def get_last_message_time(self, obj):
-        last_msg = self.get_last_message_obj(obj)
-        return last_msg.created_at if last_msg else None
+        msg = obj.messages.order_by('-created_at').first()
+        return msg.created_at.isoformat() if msg else None
+
 
 class ConversationDetailSerializer(serializers.ModelSerializer):
-    sender = serializers.SerializerMethodField()
+    sender_name = serializers.SerializerMethodField()      # ← Real full_name
+    sender_email = serializers.SerializerMethodField()
+    sender_profile_pic = serializers.SerializerMethodField()
+    my_profile_pic = serializers.SerializerMethodField()
     is_send_by_me = serializers.SerializerMethodField()
     is_read = serializers.SerializerMethodField()
 
@@ -94,29 +95,46 @@ class ConversationDetailSerializer(serializers.ModelSerializer):
         model = Message
         fields = (
             'id',
-            'sender',
+            'sender_name',
+            'sender_email',
+            'sender_profile_pic',
             'content',
             'created_at',
             'is_read',
             'is_send_by_me',
+            'my_profile_pic',
         )
 
-    def get_sender(self, obj):
-        return obj.sender.first_name
+    def get_sender_name(self, obj):
+        # Use your custom full_name field first
+        full_name = obj.sender.full_name.strip()
+        return full_name or obj.sender.email or obj.sender.username
+
+    def get_sender_email(self, obj):
+        return obj.sender.email
+
+    def get_sender_profile_pic(self, obj):
+        if obj.sender.profile_pic:
+            return obj.sender.profile_pic.url
+        return None
+
+    def get_my_profile_pic(self, obj):
+        request = self.context.get("request")
+        if request and request.user.is_authenticated and request.user.profile_pic:
+            return request.user.profile_pic.url
+        return None
 
     def get_is_send_by_me(self, obj):
         request = self.context.get("request")
-        if request and request.user.is_authenticated:
-            return obj.sender_id == request.user.id
-        return False
-    
+        return obj.sender == request.user if request else False
+
     def get_is_read(self, obj):
         request = self.context.get("request")
         if not request or not request.user.is_authenticated:
-           return False
-        if obj.sender_id == request.user.id:
-           return True
+            return False
+        if obj.sender == request.user:
+            return True
         participant = obj.conversation.participants.filter(user=request.user).first()
         if not participant or not participant.last_read_at:
-           return False
+            return False
         return obj.created_at <= participant.last_read_at

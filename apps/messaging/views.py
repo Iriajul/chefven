@@ -77,25 +77,3 @@ class ConversationDetailView(generics.RetrieveAPIView):
             "messages": serializer.data
         })
 
-# Optional: manual mark-as-read endpoint
-class MarkAsReadView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-
-    def post(self, request, pk):
-        user = request.user
-        conversation = Conversation.objects.filter(id=pk).first()
-
-        if not conversation:
-            return Response({"success": False, "error": "Conversation not found"}, status=404)
-
-        if not ConversationParticipant.objects.filter(conversation=conversation, user=user).exists():
-            return Response({"success": False, "error": "Access denied"}, status=403)
-
-        unread_messages = Message.objects.filter(
-            conversation=conversation,
-            is_read=False
-        ).exclude(sender=user)
-
-        count = unread_messages.update(is_read=True)
-
-        return Response({"success": True, "marked_read_count": count})
